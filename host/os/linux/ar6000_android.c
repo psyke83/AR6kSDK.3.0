@@ -371,7 +371,7 @@ int android_ioctl_siwpriv(struct net_device *dev,
     } else if (strcasecmp(cmd, "MACADDR")==0) {
         /* reply comes back in the form "Macaddr = XX.XX.XX.XX.XX.XX" where XX */
         A_UCHAR *mac = dev->dev_addr;
-        return snprintf(buf, data->length, "Macaddr = %02X.%02X.%02X.%02X.%02X.%02X\n",
+        return snprintf(buf, data->length, "Macaddr = %02X:%02X:%02X:%02X:%02X:%02X\n",
                         mac[0], mac[1], mac[2],
                         mac[3], mac[4], mac[5]);
     } else if (strcasecmp(cmd, "SCAN-ACTIVE")==0) {
