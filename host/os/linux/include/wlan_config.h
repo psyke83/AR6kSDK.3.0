@@ -63,7 +63,7 @@
  * 0 - Enable
  * 1 - Disable
  */
-#define WLAN_CONFIG_DISABLE_11N         1
+#define WLAN_CONFIG_DISABLE_11N         0
 
 /*
  * This configuration item enable BT clock sharing support
