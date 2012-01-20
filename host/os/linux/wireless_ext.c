@@ -2594,7 +2594,7 @@ static const iw_handler ath_handlers[] = {
     (iw_handler) ar6000_ioctl_giwsens,          /* SIOCGIWSENS */
     (iw_handler) NULL /* not _used */,          /* SIOCSIWRANGE */
     (iw_handler) W_PROTO(ar6000_ioctl_giwrange),/* SIOCGIWRANGE */
-#if 0
+#if 1
     (iw_handler) ar6000_ioctl_siwpriv,          /* SIOCSIWPRIV */
 #else
     (iw_handler) NULL /* not used */,           /* SIOCSIWPRIV */
