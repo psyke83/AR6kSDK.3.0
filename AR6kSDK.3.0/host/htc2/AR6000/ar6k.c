@@ -2,14 +2,18 @@
 /* <copyright file="ar6k.c" company="Atheros"> */
 /*    Copyright (c) 2007-2010 Atheros Corporation.  All rights reserved. */
 /*  */
-/* This program is free software; you can redistribute it and/or modify */
-/* it under the terms of the GNU General Public License version 2 as */
-/* published by the Free Software Foundation; */
 /* */
-/* Software distributed under the License is distributed on an "AS */
-/* IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or */
-/* implied. See the License for the specific language governing */
-/* rights and limitations under the License. */
+/* Permission to use, copy, modify, and/or distribute this software for any */
+/* purpose with or without fee is hereby granted, provided that the above */
+/* copyright notice and this permission notice appear in all copies. */
+/* */
+/* THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES */
+/* WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF */
+/* MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR */
+/* ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES */
+/* WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN */
+/* ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF */
+/* OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
 /* */
 /* */
 /*------------------------------------------------------------------------------ */
@@ -214,6 +218,7 @@ A_STATUS DevSetup(AR6K_DEVICE *pDev)
 
 A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev)
 {
+	  int cnt = 10;  /* add this */
     A_STATUS                  status;
     AR6K_IRQ_ENABLE_REGISTERS regs;
 
@@ -254,6 +259,7 @@ A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev)
 
     UNLOCK_AR6K(pDev);
 
+    do { /* add this */
         /* always synchronous */
     status = HIFReadWrite(pDev->HIFDevice,
                           INT_STATUS_ENABLE_ADDRESS,
@@ -268,6 +274,10 @@ A_STATUS DevEnableInterrupts(AR6K_DEVICE *pDev)
                         ("Failed to update interrupt control registers err: %d\n", status));
 
     }
+    else {        /* add this */
+      break;
+    } A_MDELAY(50);
+    } while (cnt-- > 0);  /* done */
 
     return status;
 }

@@ -1,14 +1,18 @@
 /*------------------------------------------------------------------------------ */
 /* Copyright (c) 2004-2010 Atheros Corporation.  All rights reserved. */
 /*  */
-/* This program is free software; you can redistribute it and/or modify */
-/* it under the terms of the GNU General Public License version 2 as */
-/* published by the Free Software Foundation; */
 /* */
-/* Software distributed under the License is distributed on an "AS */
-/* IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or */
-/* implied. See the License for the specific language governing */
-/* rights and limitations under the License. */
+/* Permission to use, copy, modify, and/or distribute this software for any */
+/* purpose with or without fee is hereby granted, provided that the above */
+/* copyright notice and this permission notice appear in all copies. */
+/* */
+/* THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES */
+/* WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF */
+/* MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR */
+/* ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES */
+/* WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN */
+/* ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF */
+/* OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
 /* */
 /* */
 /*------------------------------------------------------------------------------ */
@@ -2331,7 +2335,12 @@ wmi_cmd_send(struct wmi_t *wmip, void *osbuf, WMI_COMMAND_ID cmdId,
     A_STATUS status;
 #define IS_OPT_TX_CMD(cmdId) ((cmdId == WMI_OPT_TX_FRAME_CMDID))
     WMI_CMD_HDR         *cHdr;
-    HTC_ENDPOINT_ID     eid  = wmip->wmi_endpoint_id;
+    HTC_ENDPOINT_ID     eid;
+
+    if (wmip == NULL) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("wmip is NULL\n"));
+        return A_ERROR;
+    }
 
     A_ASSERT(osbuf != NULL);
 
@@ -2339,6 +2348,8 @@ wmi_cmd_send(struct wmi_t *wmip, void *osbuf, WMI_COMMAND_ID cmdId,
         A_NETBUF_FREE(osbuf);
         return A_EINVAL;
     }
+
+    eid  = wmip->wmi_endpoint_id;
 
     if ((syncflag == SYNC_BEFORE_WMIFLAG) || (syncflag == SYNC_BOTH_WMIFLAG)) {
         /*

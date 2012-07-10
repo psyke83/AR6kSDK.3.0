@@ -2,14 +2,18 @@
 /* <copyright file="hif.c" company="Atheros"> */
 /*    Copyright (c) 2004-2010 Atheros Corporation.  All rights reserved. */
 /*  */
-/* This program is free software; you can redistribute it and/or modify */
-/* it under the terms of the GNU General Public License version 2 as */
-/* published by the Free Software Foundation; */
 /* */
-/* Software distributed under the License is distributed on an "AS */
-/* IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or */
-/* implied. See the License for the specific language governing */
-/* rights and limitations under the License. */
+/* Permission to use, copy, modify, and/or distribute this software for any */
+/* purpose with or without fee is hereby granted, provided that the above */
+/* copyright notice and this permission notice appear in all copies. */
+/* */
+/* THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES */
+/* WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF */
+/* MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR */
+/* ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES */
+/* WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN */
+/* ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF */
+/* OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
 /* */
 /* */
 /*------------------------------------------------------------------------------ */
@@ -65,7 +69,6 @@ module_param(reset_sdio_on_unload, int, 0644);
 
 extern A_UINT32 nohifscattersupport;
 
-
 /* ------ Static Variables ------ */
 static const struct sdio_device_id ar6k_id_table[] = {
     {  SDIO_DEVICE(MANUFACTURER_CODE, (MANUFACTURER_ID_AR6002_BASE | 0x0))  },
@@ -105,6 +108,14 @@ OSDRV_CALLBACKS osdrvCallbacks;
 extern A_UINT32 onebitmode;
 extern A_UINT32 busspeedlow;
 extern A_UINT32 debughif;
+
+extern void __hif_add_debug_info(int step, const char *funcName, int lineno);
+extern int __ath_claim_host(struct sdio_func *func, atomic_t *abort, const char *funcName, int lineno);
+extern void ath_release_host(struct sdio_func *func);
+
+#define hif_add_debug_info(_s) __hif_add_debug_info(_s, __func__, __LINE__)
+#define ath_claim_host(_h, _a) __ath_claim_host((_h), (_a), __func__, __LINE__)
+
 
 static void ResetAllCards(void);
 static A_STATUS hifDisableFunc(HIF_DEVICE *device, struct sdio_func *func);
@@ -397,18 +408,20 @@ HIFReadWrite(HIF_DEVICE *device,
 
     return status;
 }
-/* thread to serialize all requests, both sync and async */
+
 static int async_task(void *param)
  {
     HIF_DEVICE *device;
     BUS_REQUEST *request;
     A_STATUS status;
     unsigned long flags;
+    int in_intr;
 
     device = (HIF_DEVICE *)param;
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: async task\n"));
     set_current_state(TASK_INTERRUPTIBLE);
     while(!device->async_shutdown) {
+        struct mmc_host *mmchost;
         /* wait for work */
         if (down_interruptible(&device->sem_async) != 0) {
             /* interrupted, exit */
@@ -420,7 +433,8 @@ static int async_task(void *param)
             break;
         }
         /* we want to hold the host over multiple cmds if possible, but holding the host blocks card interrupts */
-        sdio_claim_host(device->func);
+        mmchost = device->func->card->host;
+        in_intr = ath_claim_host(device->func, &device->irqHandling);
         spin_lock_irqsave(&device->asynclock, flags);
         /* pull the request to work on */
         while (device->asyncreq != NULL) {
@@ -458,9 +472,22 @@ static int async_task(void *param)
             spin_lock_irqsave(&device->asynclock, flags);
         }
         spin_unlock_irqrestore(&device->asynclock, flags);
-        sdio_release_host(device->func);
+        if (!in_intr) {
+            ath_release_host(device->func);
+        } else {
+            atomic_set(&device->irqHandling, 0);
+            if (!IS_ERR(mmchost->sdio_irq_thread)) {
+                wake_up_process(mmchost->sdio_irq_thread);
+            }
+        }
     }
 
+    if (atomic_read(&device->irqHandling)) {
+	atomic_set(&device->irqHandling, 0);
+        if (!IS_ERR(device->func->card->host->sdio_irq_thread)) {
+            wake_up_process(device->func->card->host->sdio_irq_thread);
+        }
+    }
     complete_and_exit(&device->async_completion, 0);
     return 0;
 }
@@ -487,42 +514,6 @@ static A_INT32 IssueSDCommand(HIF_DEVICE *device, A_UINT32 opcode, A_UINT32 arg,
 
     return err;
 }
-
-static A_STATUS SetupSdioClockRate(HIF_DEVICE *device, A_UINT32 clock)
-{
-    struct mmc_host *host;
-    struct mmc_card *card;
-    struct sdio_func *func;
-    A_UCHAR *sdhost;
-    unsigned int *clks_on;
-    u32 *pwr;
-    func = device->func;
-    card = func->card;
-    host = card->host;
-    if (!mmc_card_highspeed(card) && clock > card->cis.max_dtr) {
-        clock = card->cis.max_dtr;
-    }
-    if (clock > host->f_max) {
-        clock = host->f_max;
-    }
-    host->ios.clock = clock;
-
-    sdhost = mmc_priv(host);
-    sdhost += sizeof(struct notifier_block);
-    
-    clks_on = (unsigned int*)(sdhost+4+4+4+4+4+(4+4+4+4+4+4+4+4) +(4+4+4+4+4) +4 +4 );
-    pwr =  (u32*)((A_UCHAR*)clks_on + 4 + sizeof(spinlock_t) +4 + 4 +4 +4);
-
-    printk("mmc_host %p  mmc %p clks %u, %u, %u  pwr %u\n", host, *(void**)(clks_on-1-1), *(clks_on), *(clks_on+1), *(clks_on+2), *pwr);
-    host->ios.power_mode = MMC_POWER_ON; 
-    host->ops->set_ios(host, &host->ios);
-    printk("AR6K: SDIO set clock %u\n", clock);
-    printk("mmc_host %p  mmc %p clks %u, %u, %u  pwr %u\n", host, *(void**)(clks_on-1-1), *(clks_on), *(clks_on+1), *(clks_on+2), *pwr);
-
-    msleep(2);
-    return A_OK;
-}
-
 A_STATUS ReinitSDIO(HIF_DEVICE *device)
 {
     A_INT32 err;
@@ -537,7 +528,7 @@ A_STATUS ReinitSDIO(HIF_DEVICE *device)
     host = card->host;
    
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: +ReinitSDIO \n"));
-    sdio_claim_host(func);
+    ath_claim_host(func, NULL);
 
     do {
         /* 2.6.32 kernel does part of the SDIO initalization upon resume */
@@ -678,7 +669,7 @@ A_STATUS ReinitSDIO(HIF_DEVICE *device)
         }
     } while (0);
 
-    sdio_release_host(func);
+    ath_release_host(func);
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: -ReinitSDIO \n"));
 
     return (err) ? A_ERROR : A_OK;
@@ -694,8 +685,7 @@ PowerStateChangeNotify(HIF_DEVICE *device, HIF_DEVICE_POWER_CHANGE_TYPE config)
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: +PowerStateChangeNotify %d\n", config));
     switch (config) {
        case HIF_DEVICE_POWER_DOWN:
-            //HIFMaskInterrupt(device);
-            //status = SetupSdioClockRate(device, 0);
+            hif_add_debug_info(18);
             break;
        case HIF_DEVICE_POWER_CUT:
             old_reset_val = reset_sdio_on_unload;
@@ -721,22 +711,26 @@ PowerStateChangeNotify(HIF_DEVICE *device, HIF_DEVICE_POWER_CHANGE_TYPE config)
                     status = hifEnableFunc(device, func);
                 }
             } else if (device->powerConfig == HIF_DEVICE_POWER_DOWN) {
-                //status = SetupSdioClockRate(device, 50000000);
-                //HIFUnMaskInterrupt(device);
-                (void)&SetupSdioClockRate;
                 if ((device->id->device & MANUFACTURER_ID_AR6K_BASE_MASK) >= MANUFACTURER_ID_AR6003_BASE) {
+#if 0 /* temp remove this code for testing */
                     int ret;
-                    /* enable 4-bit ASYNC interrupt on AR6003 or later devices */
-                    sdio_claim_host(func);
-                    ret = Func0_CMD52WriteByte(func->card, CCCR_SDIO_IRQ_MODE_REG, SDIO_IRQ_MODE_ASYNC_4BIT_IRQ);
-                    sdio_release_host(func);
+                    /* Re-enable 4-bit ASYNC interrupt on AR6003x after system resume for some host controller */
+                    hif_add_debug_info(1);
+                    ath_claim_host(func, NULL);
+                    hif_add_debug_info(2);
+                    ret = Func0_CMD52WriteByte(func->card, CCCR_SDIO_IRQ_MODE_REG, SDIO_IRQ_MODE_ASYNC_4BIT_IRQ);                    
+                    hif_add_debug_info(3);
+                    ath_release_host(func);
+                    hif_add_debug_info(4);
                     if (ret) {
                         AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("AR6000: failed to enable 4-bit ASYNC IRQ mode %d \n",ret));
                     } else {
-                        printk("Enable 4bit successfully\n");
                         AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("AR6000: Enable 4-bit ASYNC IRQ mode %d again\n",ret));
                     }
                     status = (ret==0) ? A_OK : A_ERROR;
+#else
+                    status = A_OK;
+#endif 
                 }
             }
             break;
@@ -837,12 +831,20 @@ hifIRQHandler(struct sdio_func *func)
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: +hifIRQHandler\n"));
 
     device = getHifDevice(func);
+
     atomic_set(&device->irqHandling, 1);
-    /* release the host during ints so we can pick it back up when we process cmds */
-    sdio_release_host(device->func);
+    wake_up_process(device->async_task);
+    hif_add_debug_info(23);
     status = device->htcCallbacks.dsrHandler(device->htcCallbacks.context);
-    sdio_claim_host(device->func);
-    atomic_set(&device->irqHandling, 0);
+    hif_add_debug_info(24);
+    set_current_state(TASK_INTERRUPTIBLE);
+    while (atomic_read(&device->irqHandling)) {
+        schedule_timeout(HZ/10); /* 100 msecs */
+        hif_add_debug_info(25);
+        set_current_state(TASK_INTERRUPTIBLE);
+    }
+    set_current_state(TASK_RUNNING);
+    hif_add_debug_info(26);
     AR_DEBUG_ASSERT(status == A_OK || status == A_ECANCELED);
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: -hifIRQHandler\n"));
 }
@@ -942,9 +944,9 @@ HIFUnMaskInterrupt(HIF_DEVICE *device)
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: HIFUnMaskInterrupt\n"));
 
     /* Register the IRQ Handler */
-    sdio_claim_host(device->func);
+    ath_claim_host(device->func, NULL);
     ret = sdio_claim_irq(device->func, hifIRQHandler);
-    sdio_release_host(device->func);
+    ath_release_host(device->func);
     AR_DEBUG_ASSERT(ret == 0);
 }
 
@@ -957,14 +959,9 @@ void HIFMaskInterrupt(HIF_DEVICE *device)
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: HIFMaskInterrupt\n"));
 
     /* Mask our function IRQ */
-    sdio_claim_host(device->func);
-    while (atomic_read(&device->irqHandling)) {        
-        sdio_release_host(device->func);
-        schedule_timeout(HZ/10);
-        sdio_claim_host(device->func);
-    }
+    ath_claim_host(device->func, NULL);
     ret = sdio_release_irq(device->func);
-    sdio_release_host(device->func);
+    ath_release_host(device->func);
     AR_DEBUG_ASSERT(ret == 0);
 }
 
@@ -1022,7 +1019,7 @@ static A_STATUS hifDisableFunc(HIF_DEVICE *device, struct sdio_func *func)
         device->async_task = NULL;
     }
     /* Disable the card */
-    sdio_claim_host(device->func);
+    ath_claim_host(device->func, NULL);
     ret = sdio_disable_func(device->func);
     if (ret) {
         status = A_ERROR;
@@ -1044,7 +1041,7 @@ static A_STATUS hifDisableFunc(HIF_DEVICE *device, struct sdio_func *func)
         }
     }
 
-    sdio_release_host(device->func);
+    ath_release_host(device->func);
 
     if (status == A_OK) {
         device->is_disabled = TRUE;
@@ -1066,14 +1063,14 @@ static int hifEnableFunc(HIF_DEVICE *device, struct sdio_func *func)
 
     if (device->is_disabled) {
        /* enable the SDIO function */
-        sdio_claim_host(func);
+        ath_claim_host(func, NULL);
 
         if ((device->id->device & MANUFACTURER_ID_AR6K_BASE_MASK) >= MANUFACTURER_ID_AR6003_BASE) {
             /* enable 4-bit ASYNC interrupt on AR6003 or later devices */
             ret = Func0_CMD52WriteByte(func->card, CCCR_SDIO_IRQ_MODE_REG, SDIO_IRQ_MODE_ASYNC_4BIT_IRQ);
             if (ret) {
                 AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("AR6000: failed to enable 4-bit ASYNC IRQ mode %d \n",ret));
-                sdio_release_host(func);
+                ath_release_host(func);
                 return A_ERROR;
             }
             AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: 4-bit ASYNC IRQ mode enabled\n"));
@@ -1086,11 +1083,11 @@ static int hifEnableFunc(HIF_DEVICE *device, struct sdio_func *func)
         if (ret) {
             AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("AR6000: %s(), Unable to enable AR6K: 0x%X\n",
 					  __FUNCTION__, ret));
-            sdio_release_host(func);
+            ath_release_host(func);
             return A_ERROR;
         }
         ret = sdio_set_block_size(func, HIF_MBOX_BLOCK_SIZE);
-        sdio_release_host(func);
+        ath_release_host(func);
         if (ret) {
             AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("AR6000: %s(), Unable to set block size 0x%x  AR6K: 0x%X\n",
 					  __FUNCTION__, HIF_MBOX_BLOCK_SIZE, ret));
@@ -1141,9 +1138,15 @@ static int hifDeviceSuspend(struct device *dev)
 {
     struct sdio_func *func=dev_to_sdio_func(dev);
     A_STATUS status = A_OK;
-    HIF_DEVICE *device;   
+    HIF_DEVICE *device = getHifDevice(func);
 
-    device = getHifDevice(func);
+#if defined(MMC_PM_KEEP_POWER) || (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34))
+    struct mmc_host *host = NULL;
+    if (device && device->func) {
+        host = device->func->card->host;
+    }
+#endif
+
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: +hifDeviceSuspend\n"));
     if (device && device->claimedContext && osdrvCallbacks.deviceSuspendHandler) {
         device->is_suspend = TRUE; /* set true first for PowerStateChangeNotify(..) */
@@ -1152,13 +1155,26 @@ static int hifDeviceSuspend(struct device *dev)
             device->is_suspend = FALSE;
         }
     }
+    CleanupHIFScatterResources(device);
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: -hifDeviceSuspend\n"));
 
     switch (status) {
     case A_OK:
+#if defined(MMC_PM_KEEP_POWER) || (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34))
+        if (host)  {
+            host->pm_flags &= ~MMC_PM_KEEP_POWER;
+        }
+#endif
         return 0;
     case A_EBUSY:
-        return -EBUSY; /* Hack for kernel in order to support deep sleep and wow */
+#if defined(MMC_PM_KEEP_POWER) || (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34))
+        if (host) {
+            host->pm_flags |=  MMC_PM_KEEP_POWER;          
+        }
+        return 0;
+#else
+        return -EBUSY; /* Hack for kernel to support deep sleep and wow */
+#endif
     default:
         return -1;
     }
@@ -1219,18 +1235,26 @@ A_STATUS hifWaitForPendingRecv(HIF_DEVICE *device)
 
     do {            
         A_INT32 irqCnt = 10;		    
+        hif_add_debug_info(19);
+        set_current_state(TASK_INTERRUPTIBLE);
         while (atomic_read(&device->irqHandling) && --irqCnt > 0) {
 	        /* wait until irq handler finished all the jobs */
 			schedule_timeout(HZ/10);
+            hif_add_debug_info(20);
+            set_current_state(TASK_INTERRUPTIBLE);
 	    }
+        set_current_state(TASK_RUNNING);
+        hif_add_debug_info(21);
+        printk("Wait pending recv irqCnt %d\n", irqCnt);
 		/* check if there is any pending irq due to force done */
 		host_int_status = 0;
 	    status = HIFReadWrite(device, HOST_INT_STATUS_ADDRESS,
 				    (A_UINT8 *)&host_int_status, sizeof(host_int_status),
 			  	     HIF_RD_SYNC_BYTE_INC, NULL);
 	    host_int_status = A_SUCCESS(status) ? (host_int_status & (1 << 0)) : 0;
+        hif_add_debug_info(22);
 		if (host_int_status) {
-	        schedule(); /* schedule for next dsrHandler */
+            mmc_signal_sdio_irq(device->func->card->host);
 		}
 	} while (host_int_status && --cnt > 0);
 
@@ -1238,6 +1262,8 @@ A_STATUS hifWaitForPendingRecv(HIF_DEVICE *device)
          AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, 
                             ("AR6000: %s(), Unable clear up pending IRQ before the system suspended\n", __FUNCTION__));
          return A_ERROR;
+     } else {
+        printk("Wait Pending Recv successfully %d status %d\n", cnt, host_int_status);
      }
 
     return A_OK;

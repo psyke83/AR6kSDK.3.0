@@ -1,23 +1,25 @@
 /*------------------------------------------------------------------------------ */
-/* <copyright file="ar6k_pal.c" company="Atheros"> */
-/*    Copyright (c) 2009 Atheros Corporation.  All rights reserved. */
-/*  */
-/* The software source and binaries included in this development package are */
-/* licensed, not sold. You, or your company, received the package under one */
-/* or more license agreements. The rights granted to you are specifically */
-/* listed in these license agreement(s). All other rights remain with Atheros */
-/* Communications, Inc., its subsidiaries, or the respective owner including */
-/* those listed on the included copyright notices.  Distribution of any */
-/* portion of this package must be in strict compliance with the license */
-/* agreement(s) terms. */
-/* </copyright> */
-/*  */
-/* <summary> */
-/* 	PAL driver for AR6003 */
-/* </summary> */
+/* Copyright (c) 2004-2010 Atheros Communications Inc. */
+/* All rights reserved. */
 /* */
+/*  */
+/* */
+/* Permission to use, copy, modify, and/or distribute this software for any */
+/* purpose with or without fee is hereby granted, provided that the above */
+/* copyright notice and this permission notice appear in all copies. */
+/* */
+/* THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES */
+/* WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF */
+/* MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR */
+/* ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES */
+/* WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN */
+/* ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF */
+/* OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+/* */
+/* */
+/* */
+/* Author(s): ="Atheros" */
 /*------------------------------------------------------------------------------ */
-/*============================================================================== */
 /* PAL driver implementation */
 /* */
 /* Author(s): ="Atheros" */
@@ -479,5 +481,5 @@ static void __exit pal_cleanup_module(void)
 
 module_init(pal_init_module);
 module_exit(pal_cleanup_module);
-MODULE_LICENSE("GPL and additional rights");
+MODULE_LICENSE("Dual BSD/GPL");
 #endif

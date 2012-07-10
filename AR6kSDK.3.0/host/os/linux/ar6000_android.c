@@ -3,14 +3,18 @@
 /* All rights reserved. */
 /* */
 /*  */
-/* This program is free software; you can redistribute it and/or modify */
-/* it under the terms of the GNU General Public License version 2 as */
-/* published by the Free Software Foundation; */
 /* */
-/* Software distributed under the License is distributed on an "AS */
-/* IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or */
-/* implied. See the License for the specific language governing */
-/* rights and limitations under the License. */
+/* Permission to use, copy, modify, and/or distribute this software for any */
+/* purpose with or without fee is hereby granted, provided that the above */
+/* copyright notice and this permission notice appear in all copies. */
+/* */
+/* THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES */
+/* WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF */
+/* MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR */
+/* ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES */
+/* WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN */
+/* ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF */
+/* OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
 /* */
 /* */
 /* */
@@ -326,13 +330,22 @@ int android_ioctl_siwpriv(struct net_device *dev,
               struct iw_request_info *__info,
               struct iw_point *data, char *__extra)
 {
-    char *cmd = data->pointer;
-    char *buf = data->pointer;
+    char cmd[128]; /* assume that android command will not excess 128 */
+    char buf[512];
+    int len = sizeof(cmd)-1;
     AR_SOFTC_T *ar = (AR_SOFTC_T *)ar6k_priv(dev);
 
-    if (!cmd || !buf) {
+    if (!data->pointer) {
         return -EOPNOTSUPP;
     }
+    if (data->length < len) {
+        len = data->length;
+    }
+    if (copy_from_user(cmd, data->pointer, len)) {
+        return -EIO;
+    }
+    cmd[len] = 0;
+
     if (strcasecmp(cmd, "RSSI")==0 || strcasecmp(cmd, "RSSI-APPROX") == 0) {
         int rssi = 255;
         struct iw_statistics *iwStats;
@@ -350,8 +363,10 @@ int android_ioctl_siwpriv(struct net_device *dev,
             else
                 rssi += (161 - 256);                
         }
-        return snprintf(buf, data->length, "SSID rssi %d\n", rssi);               
+        len = snprintf(buf, data->length, "SSID rssi %d\n", rssi) + 1;
+        return (copy_to_user(data->pointer, buf, len)==0) ? len : -1;
     } else if (strcasecmp(cmd, "LINKSPEED")==0) {
+#if 0
         int iocmd = SIOCGIWRATE - SIOCSIWCOMMIT;
         const iw_handler getRate = dev->wireless_handlers->standard[iocmd];
         if (getRate) {
@@ -363,22 +378,30 @@ int android_ioctl_siwpriv(struct net_device *dev,
             if (getRate(dev, &minfo, &miwr, NULL) == 0) {
                 unsigned int speed_kbps = miwr.param.value / 1000000;
                 if ((!miwr.param.fixed)) {
-                    return snprintf(buf, data->length, "LinkSpeed %u\n", speed_kbps);
+                    len = snprintf(buf, data->length, "LinkSpeed %u\n", speed_kbps) + 1;
+                    return (copy_to_user(data->pointer, buf, len)==0) ? len : -1;
                 }
             }
         }
         return -1;
+#else
+        unsigned int speed_mbps = ar->arTargetStats.tx_unicast_rate / 1000;
+#endif
+        len = snprintf(buf, data->length, "LinkSpeed %u\n", speed_mbps) + 1;
+        return (copy_to_user(data->pointer, buf, len)==0) ? len : -1;
     } else if (strcasecmp(cmd, "MACADDR")==0) {
-        /* reply comes back in the form "Macaddr = XX.XX.XX.XX.XX.XX" where XX */
+        /* reply comes back in the form "Macaddr = XX:XX:XX:XX:XX:XX" where XX */
         A_UCHAR *mac = dev->dev_addr;
-        return snprintf(buf, data->length, "Macaddr = %02X:%02X:%02X:%02X:%02X:%02X\n",
+        len = snprintf(buf, data->length, "Macaddr = %02X:%02X:%02X:%02X:%02X:%02X\n",
                         mac[0], mac[1], mac[2],
-                        mac[3], mac[4], mac[5]);
+                        mac[3], mac[4], mac[5]) + 1;
+        return (copy_to_user(data->pointer, buf, len)==0) ? len : -1;
     } else if (strcasecmp(cmd, "SCAN-ACTIVE")==0) {
         return 0; /* unsupport function. Suppress the error */
     } else if (strcasecmp(cmd, "SCAN-PASSIVE")==0) {
         return 0; /* unsupport function. Suppress the error */
     } else if (strcasecmp(cmd, "START")==0 || strcasecmp(cmd, "STOP")==0) {
+#if 0
         struct ifreq ifr;
         char userBuf[16];
         int ex_arg = (strcasecmp(cmd, "START")==0) ? WLAN_ENABLED : WLAN_DISABLED;
@@ -387,6 +410,17 @@ int android_ioctl_siwpriv(struct net_device *dev,
         ((int *)userBuf)[0] = AR6000_XIOCTRL_WMI_SET_WLAN_STATE;
         ((int *)userBuf)[1] = ex_arg;
         return android_do_ioctl_direct(dev, AR6000_IOCTL_EXTENDED, &ifr, userBuf);
+#else
+        int ret =0;
+#endif
+        if (ret==0) {
+            /* Send wireless event which need by android supplicant */
+            union iwreq_data wrqu;
+            A_MEMZERO(&wrqu, sizeof(wrqu));
+            wrqu.data.length = strlen(cmd);
+            wireless_send_event(dev, IWEVCUSTOM, &wrqu, cmd);
+        }
+        return ret;
     } else if (strncasecmp(cmd, "POWERMODE ", 10)==0) {
         int mode;
         if (sscanf(cmd, "%*s %d", &mode) == 1) {
@@ -425,7 +459,8 @@ int android_ioctl_siwpriv(struct net_device *dev,
             getRange(dev, &minfo, &miwr, (char*)&range);
         }
         if (ar->arNumChannels!=-1) {
-            return snprintf(buf, data->length, "Scan-Channels = %d\n", ar->arNumChannels);
+            len = snprintf(buf, data->length, "Scan-Channels = %d\n", ar->arNumChannels) + 1;
+            return (copy_to_user(data->pointer, buf, len)==0) ? len : -1;
         }
         return -1;
     } else if (strncasecmp(cmd, "SCAN-CHANNELS ", 14)==0 || 

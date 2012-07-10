@@ -5,14 +5,18 @@
 /* */
 /* */
 /*  */
-/* This program is free software; you can redistribute it and/or modify */
-/* it under the terms of the GNU General Public License version 2 as */
-/* published by the Free Software Foundation; */
 /* */
-/* Software distributed under the License is distributed on an "AS */
-/* IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or */
-/* implied. See the License for the specific language governing */
-/* rights and limitations under the License. */
+/* Permission to use, copy, modify, and/or distribute this software for any */
+/* purpose with or without fee is hereby granted, provided that the above */
+/* copyright notice and this permission notice appear in all copies. */
+/* */
+/* THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES */
+/* WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF */
+/* MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR */
+/* ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES */
+/* WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN */
+/* ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF */
+/* OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
 /* */
 /* */
 /* */
@@ -369,7 +373,7 @@ static A_STATUS ar6000_wow_suspend(AR_SOFTC_T *ar)
 
     status = hifWaitForPendingRecv(ar->arHifDevice);
     if (status != A_OK) {
-        return A_ERROR;
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Fail to process for all pending rx data\n"));
     }
 
     config = HIF_DEVICE_POWER_DOWN;
@@ -396,12 +400,8 @@ wow_not_connected:
             if (ar6000_wow_suspend(ar) == A_OK) {
                 AR_DEBUG_PRINTF(ATH_DEBUG_PM,("%s:Suspend for wow mode %d\n", __func__, ar->arWlanPowerState));
             } else {
-                A_UINT16 oldSuspendConfig = ar->arSuspendConfig;
-                AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Force to cut off in order to restore the bad state\n"));
-                ar->arSuspendConfig = WLAN_SUSPEND_CUT_PWR;                
-                ar6000_update_wlan_pwr_state(ar, WLAN_DISABLED, TRUE);
-                ar->arSuspendConfig = oldSuspendConfig;
-                break;
+                AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Fail to setup wow suspend\n"));
+                return A_ERROR;
             }
         } else {
             pmmode = ar->arWow2Config;
@@ -808,7 +808,7 @@ ar6000_setup_deep_sleep_state(struct ar6_softc *ar, AR6000_WLAN_STATE state)
             }
             status = hifWaitForPendingRecv(ar->arHifDevice);
             if (status != A_OK) {
-                break;
+                AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Fail to process for all pending rx data\n"));
             }
 
             config = HIF_DEVICE_POWER_DOWN;
@@ -893,7 +893,7 @@ ar6000_update_wlan_pwr_state(struct ar6_softc *ar, AR6000_WLAN_STATE state, A_BO
                                         (!ar->arBTSharing || btOff));
             if ((suspendCutPwr) ||
                 (suspendCutIfBtOff) ||
-                (ar->arWlanState==WLAN_POWER_STATE_CUT_PWR))
+                (ar->arWlanPowerState==WLAN_POWER_STATE_CUT_PWR))
             {
                 powerState = WLAN_POWER_STATE_CUT_PWR;
             }
@@ -914,11 +914,12 @@ ar6000_update_wlan_pwr_state(struct ar6_softc *ar, AR6000_WLAN_STATE state, A_BO
                 ar6000_setup_cut_power_state(ar, WLAN_ENABLED);
             }
             status = ar6000_setup_deep_sleep_state(ar, WLAN_DISABLED);
-            if (status != A_OK) {
-                AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Force to cut off in order to restore the bad deep sleep state\n"));
-                status = ar6000_setup_cut_power_state(ar, WLAN_DISABLED);
-            }                
         } else if (powerState == WLAN_POWER_STATE_CUT_PWR) {
+#if 0
+            if (ar->arWlanPowerState == WLAN_POWER_STATE_DEEP_SLEEP) {
+                status = ar6000_setup_deep_sleep_state(ar, WLAN_ENABLED);
+            }
+#endif
             status = ar6000_setup_cut_power_state(ar, WLAN_DISABLED);
         }
 

@@ -3,14 +3,18 @@
 /* All rights reserved. */
 /* */
 /*  */
-/* This program is free software; you can redistribute it and/or modify */
-/* it under the terms of the GNU General Public License version 2 as */
-/* published by the Free Software Foundation; */
 /* */
-/* Software distributed under the License is distributed on an "AS */
-/* IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or */
-/* implied. See the License for the specific language governing */
-/* rights and limitations under the License. */
+/* Permission to use, copy, modify, and/or distribute this software for any */
+/* purpose with or without fee is hereby granted, provided that the above */
+/* copyright notice and this permission notice appear in all copies. */
+/* */
+/* THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES */
+/* WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF */
+/* MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR */
+/* ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES */
+/* WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN */
+/* ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF */
+/* OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
 /* */
 /* */
 /* */
@@ -86,7 +90,7 @@ ATH_DEBUG_INSTANTIATE_MODULE_VAR(driver,
 
 MODULE_AUTHOR("Atheros Communications, Inc.");
 MODULE_DESCRIPTION(DESCRIPTION);
-MODULE_LICENSE("GPL and additional rights");
+MODULE_LICENSE("Dual BSD/GPL");
 
 
 
@@ -1037,6 +1041,12 @@ void calculate_crc(A_UINT32 TargetType, A_UCHAR *eeprom_data, size_t eeprom_size
 static void 
 ar6000_softmac_update(AR_SOFTC_T *ar, A_UCHAR *eeprom_data, size_t eeprom_size)
 {
+    /* We need to store the MAC, which comes either from the softmac file or is
+     * randomly generated, because we do not want to load a new MAC address
+     * if the chip goes into suspend and then is resumed later on.  We ONLY
+     * want to load a new MAC  if the driver is unloaded and then reloaded
+     */
+    static A_UCHAR random_mac[6];
     const char *source = "random generated";
     const struct firmware *softmac_entry;
     A_UCHAR *ptr_mac;
@@ -1051,17 +1061,24 @@ ar6000_softmac_update(AR_SOFTC_T *ar, A_UCHAR *eeprom_data, size_t eeprom_size)
         AR_DEBUG_PRINTF(ATH_DEBUG_ERR,("Invalid Target Type \n"));
         return;
     }
-    printk("MAC from EEPROM %02X:%02X:%02X:%02X:%02X:%02X\n", 
-            ptr_mac[0], ptr_mac[1], ptr_mac[2], 
-            ptr_mac[3], ptr_mac[4], ptr_mac[5]); 
 
+    AR_DEBUG_PRINTF(ATH_DEBUG_WARN,  
+                ("MAC from EEPROM %02X:%02X:%02X:%02X:%02X:%02X\n", 
+            ptr_mac[0], ptr_mac[1], ptr_mac[2], 
+                ptr_mac[3], ptr_mac[4], ptr_mac[5])); 
+
+    if (memcmp(random_mac, "\0\0\0\0\0\0", 6)!=0) {
+        memcpy(ptr_mac, random_mac, 6);
+    } else {
     /* create a random MAC in case we cannot read file from system */
-    ptr_mac[0] = 0;
-    ptr_mac[1] = 0x03;
-    ptr_mac[2] = 0x7F;
-    ptr_mac[3] = random32() & 0xff; 
-    ptr_mac[4] = random32() & 0xff; 
-    ptr_mac[5] = random32() & 0xff; 
+        ptr_mac[0] = random_mac[0] = 2; /* locally administered */
+        ptr_mac[1] = random_mac[1] = 0x03;
+        ptr_mac[2] = random_mac[2] = 0x7F;
+        ptr_mac[3] = random_mac[3] = random32() & 0xff; 
+        ptr_mac[4] = random_mac[4] = random32() & 0xff; 
+        ptr_mac[5] = random_mac[5] = random32() & 0xff;
+    } 
+
     if ((A_REQUEST_FIRMWARE(&softmac_entry, "softmac", ((struct device *)ar->osDevInfo.pOSDevice))) == 0)
     {
         A_CHAR *macbuf = A_MALLOC_NOWAIT(softmac_entry->size+1);
@@ -1074,17 +1091,25 @@ ar6000_softmac_update(AR_SOFTC_T *ar, A_UCHAR *eeprom_data, size_t eeprom_size)
                         &softmac[3], &softmac[4], &softmac[5])==6) {
                 int i;
                 for (i=0; i<6; ++i) {
-                    ptr_mac[i] = softmac[i] & 0xff;
+                    ptr_mac[i] = (softmac[i] & 0xff);
                 }
                 source = "softmac file";
+                A_MEMZERO(random_mac, sizeof(random_mac));
             }
             A_FREE(macbuf);
         }
         A_RELEASE_FIRMWARE(softmac_entry);
     }
-    printk("MAC from %s %02X:%02X:%02X:%02X:%02X:%02X\n", source,
-            ptr_mac[0], ptr_mac[1], ptr_mac[2], 
-            ptr_mac[3], ptr_mac[4], ptr_mac[5]); 
+
+    if (memcmp(random_mac, "\0\0\0\0\0\0", 6)!=0) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Warning! Random MAC address is just for testing purpose\n"));
+    }
+    
+    AR_DEBUG_PRINTF(ATH_DEBUG_WARN, 
+                    ("MAC from %s %02X:%02X:%02X:%02X:%02X:%02X\n", 
+                    source, ptr_mac[0], ptr_mac[1], ptr_mac[2], 
+                    ptr_mac[3], ptr_mac[4], ptr_mac[5]));
+
    calculate_crc(ar->arTargetType, eeprom_data, eeprom_size);
 }
 #endif /* SOFTMAC_FILE_USED */
@@ -1117,7 +1142,14 @@ ar6000_transfer_bin_file(AR_SOFTC_T *ar, AR6K_BIN_FILE file, A_UINT32 address, A
     const char *filename;
     const struct firmware *fw_entry;
     A_UINT32 fw_entry_size;
-
+    A_UCHAR *tempEeprom;
+    A_UINT32 board_data_size;
+    // Change board data file Accoarding to hw revision
+    char filename_buf[WMI_CONTROL_MSG_MAX_LEN];
+    char abs_path_buf[WMI_CONTROL_MSG_MAX_LEN];
+    int revision = system_rev;
+    // Change board data file Accoarding to hw revision
+    
     switch (file) {
         case AR6K_OTP_FILE:
             if (ar->arVersion.target_ver == AR6003_REV1_VERSION) {
@@ -1198,6 +1230,24 @@ ar6000_transfer_bin_file(AR_SOFTC_T *ar, AR6K_BIN_FILE file, A_UINT32 address, A
                 filename = AR6003_REV1_BOARD_DATA_FILE;
             } else if (ar->arVersion.target_ver == AR6003_REV2_VERSION) {
                 filename = AR6003_REV2_BOARD_DATA_FILE;
+
+                // Change board data file Accoarding to hw revision
+                printk(KERN_DEBUG "AR6K: system_rev: %d\n", revision);
+                while (revision >= 0) {
+                    sprintf(filename_buf, "%s.%02d", AR6003_REV2_BOARD_DATA_FILE, revision);
+                    sprintf(abs_path_buf, "/system/wifi/%s", filename_buf);
+                    if(IS_ERR(filp_open(abs_path_buf, O_RDONLY, S_IRUSR))) {
+                        printk(KERN_DEBUG "AR6K: Board cal file is not exist: %s, use another cal file below\n", filename_buf);
+                        revision--;
+                    } else {
+                        printk(KERN_DEBUG "AR6K: Board cal file exist: %s\n", filename_buf);
+                        filename = filename_buf;
+                        break;
+                    }
+                } 
+                // Change board data file Accoarding to hw revision
+
+                printk(KERN_DEBUG "AR6K: AR6K_BOARD_DATA_FILE: %s\n", filename);
             } else {
                 AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Unknown firmware revision: %d\n", ar->arVersion.target_ver));
                 return A_ERROR;
@@ -1214,29 +1264,33 @@ ar6000_transfer_bin_file(AR_SOFTC_T *ar, AR6K_BIN_FILE file, A_UINT32 address, A
         return A_ENOENT;
     }
 
-    if (file==AR6K_BOARD_DATA_FILE && fw_entry->data) {
-#ifdef SOFTMAC_FILE_USED
-        ar6000_softmac_update(ar, (A_UCHAR *)fw_entry->data, fw_entry->size);
-#endif
-        if (regcode!=0) {
-            ar6000_reg_update(ar, (A_UCHAR *)fw_entry->data, fw_entry->size, regcode);
-        }        
-    } 
-
-
     fw_entry_size = fw_entry->size;
+    tempEeprom = NULL;
 
-    /* Load extended board data for AR6003 */
-    if ((file==AR6K_BOARD_DATA_FILE) && (fw_entry->data)) {
+    if (file==AR6K_BOARD_DATA_FILE && fw_entry->data) {
         A_UINT32 board_ext_address;
         A_UINT32 board_ext_data_size;
-        A_UINT32 board_data_size;
+
+        tempEeprom = A_MALLOC_NOWAIT(fw_entry->size);
+        if (!tempEeprom) {
+            AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Memory allocation failed\n"));
+            return A_ERROR;
+        }
+        
+        board_data_size = (((ar)->arTargetType == TARGET_TYPE_AR6002) ? AR6002_BOARD_DATA_SZ : \
+                          (((ar)->arTargetType == TARGET_TYPE_AR6003) ? AR6003_BOARD_DATA_SZ : 0));
 
         board_ext_data_size = (((ar)->arTargetType == TARGET_TYPE_AR6002) ? AR6002_BOARD_EXT_DATA_SZ : \
                                (((ar)->arTargetType == TARGET_TYPE_AR6003) ? AR6003_BOARD_EXT_DATA_SZ : 0));
 
-        board_data_size = (((ar)->arTargetType == TARGET_TYPE_AR6002) ? AR6002_BOARD_DATA_SZ : \
-                          (((ar)->arTargetType == TARGET_TYPE_AR6003) ? AR6003_BOARD_DATA_SZ : 0));
+        A_MEMCPY(tempEeprom, (A_UCHAR *)fw_entry->data, fw_entry->size);
+
+#ifdef SOFTMAC_FILE_USED
+        ar6000_softmac_update(ar, tempEeprom, board_data_size);
+#endif
+        if (regcode!=0) {
+            ar6000_reg_update(ar, tempEeprom, board_data_size, regcode);
+        }
         
         /* Determine where in Target RAM to write Board Data */
         bmifn(BMIReadMemory(ar->arHifDevice, HOST_INTEREST_ITEM_ADDRESS(ar, hi_board_ext_data), (A_UCHAR *)&board_ext_address, 4));
@@ -1246,7 +1300,7 @@ ar6000_transfer_bin_file(AR_SOFTC_T *ar, AR6K_BIN_FILE file, A_UINT32 address, A
         if ((board_ext_address) && (fw_entry->size == (board_data_size + board_ext_data_size))) {
             A_UINT32 param;
 
-            status = BMIWriteMemory(ar->arHifDevice, board_ext_address, (A_UCHAR *)(((A_UINT32)fw_entry->data) + board_data_size), board_ext_data_size);
+            status = BMIWriteMemory(ar->arHifDevice, board_ext_address, (A_UCHAR *)(((A_UINT32)tempEeprom) + board_data_size), board_ext_data_size);
 
             if (status != A_OK) {
                 AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("BMI operation failed: %d\n", __LINE__));
@@ -1264,7 +1318,18 @@ ar6000_transfer_bin_file(AR_SOFTC_T *ar, AR6K_BIN_FILE file, A_UINT32 address, A
     if (compressed) {
         status = BMIFastDownload(ar->arHifDevice, address, (A_UCHAR *)fw_entry->data, fw_entry_size);
     } else {
+        if (file==AR6K_BOARD_DATA_FILE && fw_entry->data)
+        {
+            status = BMIWriteMemory(ar->arHifDevice, address, (A_UCHAR *)tempEeprom, fw_entry_size);
+        }
+        else
+        {
         status = BMIWriteMemory(ar->arHifDevice, address, (A_UCHAR *)fw_entry->data, fw_entry_size);
+    }
+    }
+
+    if (tempEeprom) {
+        A_FREE(tempEeprom);
     }
 
     if (status != A_OK) {
@@ -4733,7 +4798,9 @@ skip_key:
     }
 
     if ((ar->arNetworkType == INFRA_NETWORK)) {
+        if (ar->arConnectPending) {
         wmi_listeninterval_cmd(ar->arWmi, ar->arListenIntervalT, ar->arListenIntervalB);
+    }
     }
 
     if (beaconIeLen && (sizeof(buf) > (9 + beaconIeLen * 2))) {
@@ -5280,11 +5347,9 @@ ar6000_scanComplete_event(AR_SOFTC_T *ar, A_STATUS status)
         wmi_bssfilter_cmd(ar->arWmi, NONE_BSS_FILTER, 0);
     }
     if (ar->scan_triggered) {
-        if (status==A_OK) {
-            union iwreq_data wrqu;
-            A_MEMZERO(&wrqu, sizeof(wrqu));
-            wireless_send_event(ar->arNetDev, SIOCGIWSCAN, &wrqu, NULL);
-        }
+        union iwreq_data wrqu;
+        A_MEMZERO(&wrqu, sizeof(wrqu));
+        wireless_send_event(ar->arNetDev, SIOCGIWSCAN, &wrqu, NULL);
         ar->scan_triggered = 0;
     }
 

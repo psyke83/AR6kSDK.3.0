@@ -65,9 +65,6 @@ reload() {
         rmmod ar6000
     fi
     $SYSLOG "Try to load driver with $@"
-    if exp `getprop ro.build.version.sdk` == 8; then
-        sleep 1
-    fi
     insmod /system/wifi/ar6000.ko $@
     
     for i in 1 2 3 4 5 6 7 8 9 10; do
